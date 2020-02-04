@@ -15,6 +15,15 @@ let ``Schreiner example from decotengu`` () =
         {Breathing = GasMix.EAN32; Depth = {Time = 2.<min>; CurrentAbsolutePressure = 4.0<bar>; AscentRate = -1.<bar/min> }}
     ]
     let iter0 = List.zip table.Compartments (BuhlmanTables.init table 1.) |> Map.ofList 
-    let a = List.fold schreinerMultiCompartment iter0 dive
-    let bb =(a |> Map.toList |> List.map snd |> List.head)
-    Assert.Equal(2.421840492164397, bb.N2)
+    
+    let firstCalculatedN2s = 
+        List.scan schreinerMultiCompartment iter0 dive
+        |> List.map (fun x -> x |> Map.toList |> List.map snd |> List.head)
+        |> List.map (fun x -> x.N2)
+    
+    let firstN2Knowns = [
+        0.74065446;
+        0.9193966739893478;
+        2.5674910421243347;
+        2.421840492164397]
+    firstCalculatedN2s |> List.zip firstN2Knowns |> List.iter (fun (a,b) -> Assert.Equal(a,b))
