@@ -5,7 +5,7 @@ open System.IO
 open System.Reflection
 
 module Resources = 
-    open BuhlmanTables
+    open Tables
     let private deserializeJsonStream (stream:Stream) = 
         let serializerSettings =
             let resolver = DefaultContractResolver(NamingStrategy = SnakeCaseNamingStrategy())
@@ -23,6 +23,6 @@ module Resources =
         
     let loadTables filename = File.ReadAllText(filename) |> deserializeJson
     let loadBundledTables () =
-        let asm = typedefof<FsDeco.BuhlmanTables.CurrentPressure>.GetTypeInfo().Assembly
+        let asm = typedefof<FsDeco.Tables.Table>.GetTypeInfo().Assembly
         //printfn "NINJA %A" (asm.GetManifestResourceNames())
         asm.GetManifestResourceStream("FsDeco.buhlman_tables.json") |> deserializeJsonStream

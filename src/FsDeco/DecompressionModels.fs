@@ -1,4 +1,5 @@
 ﻿namespace FsDeco
+open Microsoft.FSharp.Core
     
 //https://wrobell.dcmod.org/decotengu/_modules/decotengu/model.html
 //https://wrobell.dcmod.org/decotengu/model.html#schreiner-equation
@@ -6,55 +7,96 @@
     
 [<Measure>] type min
 [<Measure>] type bar
+[<Measure>] type gasFraction
 
-module BuhlmanTables =
+module Constants =
+    let waterVaporPressure = 0.0627<bar>
+    let surfacePressure = 1.0<bar>
+
+module Calculations =
+    //Palv Pressure of inspired inert gas
+    let pAlv fGas pAbs pWvp = fGas * (pAbs - pWvp)
+    /// Schreiner equation: P = Pio + R(t - 1/k) - [Pio - Po - (R/k)]e^-kt
+    let schreiner po pAlv r t k = pAlv + r * (t - 1. / k) - (pAlv - po - r / k) * exp(-k * t)
+    
+    let shreinerFull po fGas pAbs pWvp pRate t hT = 
+        schreiner po (pAlv fGas pAbs pWvp) (fGas * pRate) t (log(2.) / hT)
+    
+    //Buhlmann + Erik Baker GF: Pl=(P-A*gf)/(gf/B+1.0−gf)
+    let buhlmann gf a b p = (p - a * gf)/(gf/b + 1.0 - gf)
+    
+module TypedCalculations =
+    let pressureOfInspiredInertGas waterVaporPressure (absolutePressure:float<bar>) (inertGasFraction:float<gasFraction>)  =
+        Calculations.pAlv (float inertGasFraction) (float absolutePressure) (float waterVaporPressure) * 1.<bar>
+
+    let schreiner 
+        (initialInertGasInCompartment:float<bar>)
+        (pressureOfInspiredInertGas:float<bar>)
+        (rateOfChangeOfInertGasPressure:float<gasFraction*bar/min>)
+        (timeOfExposure:float<min>) 
+        gasDecayConstantForTissueCompartment  = 
+            Calculations.schreiner 
+                (float initialInertGasInCompartment) 
+                (float pressureOfInspiredInertGas) 
+                (float rateOfChangeOfInertGasPressure)
+                (float timeOfExposure)
+                gasDecayConstantForTissueCompartment * 1.<bar>
+    
+    let schreinerFull 
+        initialInertGasInCompartment
+        inertGasFraction
+        absolutePressure
+        ascentRate
+        timeOfExposure
+        waterVaporPressure
+        halftimeForTissueCompartment = 
+        schreiner initialInertGasInCompartment 
+            (pressureOfInspiredInertGas waterVaporPressure absolutePressure inertGasFraction  ) 
+            (inertGasFraction * ascentRate)
+            timeOfExposure 
+            (log(2.) / halftimeForTissueCompartment)
+
+    let buhlmann gradientFactor a b (pressure:float<bar>) = 
+        Calculations.buhlmann gradientFactor a b (float pressure) * 1.<bar>
+
+module Tables =
     type GasValue = {HalfTime:float; A:float; B:float}
-    type Depth = {Time:float<min>; AscentRate:float<bar/min>; CurrentAbsolutePressure:float<bar>}
     type Compartment = {N2:GasValue;He:GasValue}
     type Table = {Name:string;Source:string;Compartments:Compartment list}
 
-
-
-    type GasMix = {He:float;N2:float}
-        with static member EAN32 = {N2 = 0.68; He=0.}
-    let waterVaporPressure =  0.0627 //0.627??
-    let nitrogenAtSeaLevel = 0.7902
-    type GradientFactor = {Hi:float;Low:float}
-        with static member Default = {Hi=0.85;Low=0.3}
-
-    type CurrentPressure = {He:float;N2:float}
-        with static member Init surfacePressure = {He=0.0;N2=nitrogenAtSeaLevel * (surfacePressure - waterVaporPressure)}
-
-    let init profile surfacePressure =
-        profile.Compartments |> List.map (fun _  -> CurrentPressure.Init surfacePressure)
-
-    type Diving = {Breathing:GasMix; Depth:Depth}
-
-    /// Schreiner equation: P = Pio + R(t - 1/k) - [Pio - Po - (R/k)]e^-kt
-    let private schreiner po pio r t k =
-        //printfn "P = %f + %f * (%f - 1. / %f) - (%f - %f - %f / %f)e^%f*%f" pio r t k pio po r k -k t
-        pio + r * (t - 1. / k) - (pio - po - r / k) * exp(-k * t)
+module Decompression =
+    open Tables
     
-    //Buhlmann + Erik Baker GF: Pl=(P−A∗gf)/(gf/B+1.0−gf)
-    let buhlmann gf (comp : Compartment) pressure = {
-        N2 = ((pressure.N2 - comp.N2.A * gf)/(gf/comp.N2.B + 1.0 - gf))
-        He = ((pressure.He - comp.He.A * gf)/(gf/comp.He.B + 1.0 - gf))}
+    type GasMix = {He:float<gasFraction>;N2:float<gasFraction>} with 
+        static member EAN32 = {N2 = 0.68<gasFraction>; He=0.<gasFraction>}
+        static member Air = {N2 = 0.7902<gasFraction>; He=0.<gasFraction>}
     
-    type SchreinerGasDetails = {InitialInertGasPressure:float;InertGasFraction:float;Halftime:float}
+    type DiveStep = {Breathing:GasMix; Time:float<min>; AscentRate:float<bar/min>; CurrentAbsolutePressure:float<bar>}
+
+    // type GradientFactor = {Hi:float;Low:float}
+    //     with static member Default = {Hi=0.85;Low=0.3}
+
+    let private calcSurfacePressure = TypedCalculations.pressureOfInspiredInertGas Constants.waterVaporPressure Constants.surfacePressure
+
+    type TissuePressure = {Current:float<bar>; CompartmentDetails:GasValue}
+
+    type DiveState = {Helium: TissuePressure list;Nitrogen: TissuePressure list} with
+        static member Init (table:Table) = {
+            Helium   = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure GasMix.Air.He; CompartmentDetails = x.He })
+            Nitrogen = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure GasMix.Air.N2; CompartmentDetails = x.N2 })}
+        
+    let schreinerNewState (state:DiveState) (diving:DiveStep) = 
+        let calc inertGasFraction state = { 
+            state with 
+                Current = TypedCalculations.schreinerFull 
+                    state.Current
+                    inertGasFraction
+                    diving.CurrentAbsolutePressure 
+                    diving.AscentRate 
+                    diving.Time 
+                    Constants.waterVaporPressure
+                    state.CompartmentDetails.HalfTime }
+        { Helium = state.Helium |> List.map (calc diving.Breathing.He)
+          Nitrogen = state.Nitrogen |> List.map (calc diving.Breathing.N2)}
     
-    let private schreiner2 waterWaporPressure depth details =
-        let palv = details.InertGasFraction * ((float depth.CurrentAbsolutePressure) - waterWaporPressure)
-        let r = details.InertGasFraction  * (float depth.AscentRate)
-        let gasDecayConstant = log(2.) / details.Halftime
-        schreiner details.InitialInertGasPressure palv r (float depth.Time) gasDecayConstant
-
-    let schreinerSingleCompartment (compartment:Compartment) current diving = 
-        let he = {InitialInertGasPressure=current.He; InertGasFraction=diving.Breathing.He; Halftime = compartment.He.HalfTime }
-        let n2 = {InitialInertGasPressure=current.N2; InertGasFraction=diving.Breathing.N2; Halftime = compartment.N2.HalfTime }
-        let sh = schreiner2 waterVaporPressure diving.Depth
-        {CurrentPressure.He = sh he; CurrentPressure.N2 = sh n2}
-
-    let schreinerMultiCompartment (state:Map<Compartment,CurrentPressure>) (diving:Diving) = 
-        state |> Map.toList
-              |> List.map (fun (comp, press) -> (comp, schreinerSingleCompartment comp press diving))
-              |> Map.ofList
+    let schreinerCacluate table dives = List.scan schreinerNewState (DiveState.Init table) dives 
