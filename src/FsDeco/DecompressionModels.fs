@@ -1,4 +1,4 @@
-﻿namespace FsDeco
+namespace FsDeco
 open Microsoft.FSharp.Core
     
 //https://wrobell.dcmod.org/decotengu/_modules/decotengu/model.html
@@ -59,10 +59,7 @@ module TypedCalculations =
     let buhlmann gradientFactor a b (pressure:float<bar>) = 
         Calculations.buhlmann gradientFactor a b (float pressure) * 1.<bar>
 
-module Tables =
-    type GasValue = {HalfTime:float; A:float; B:float}
-    type Compartment = {N2:GasValue;He:GasValue}
-    type Table = {Name:string;Source:string;Compartments:Compartment list}
+
 
 module Decompression =
     open Tables

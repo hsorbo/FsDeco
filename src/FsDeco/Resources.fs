@@ -4,6 +4,11 @@ open Newtonsoft.Json.Serialization
 open System.IO
 open System.Reflection
 
+module Tables =
+    type GasValue = {HalfTime:float; A:float; B:float}
+    type Compartment = {N2:GasValue;He:GasValue}
+    type Table = {Name:string;Source:string;Compartments:Compartment list}
+
 module Resources = 
     open Tables
     let private deserializeJsonStream (stream:Stream) = 
@@ -23,6 +28,6 @@ module Resources =
         
     let loadTables filename = File.ReadAllText(filename) |> deserializeJson
     let loadBundledTables () =
-        let asm = typedefof<FsDeco.Tables.Table>.GetTypeInfo().Assembly
+        let asm = typedefof<Tables.Table>.GetTypeInfo().Assembly
         //printfn "NINJA %A" (asm.GetManifestResourceNames())
         asm.GetManifestResourceStream("FsDeco.buhlman_tables.json") |> deserializeJsonStream

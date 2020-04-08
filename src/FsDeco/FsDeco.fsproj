@@ -3,8 +3,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="DecompressionModels.fs" />
     <Compile Include="Resources.fs" />
+    <Compile Include="DecompressionModels.fs" />
   </ItemGroup>
 
   <ItemGroup>
