@@ -27,6 +27,15 @@ module GfDeco =
     | ConstantDepthAbsoluteRuntime of depth:float * runTimeEndOfSegment:float * mixNumber:int
     | ConstantDepth of depth:float * segmentTime:float * mixNumber:int
     
+    type DiveSegmentAction =
+    | ChangeDepth of startingDepth:float * endingDepth:float
+    | KeepDepth of depth:float
+
+    type DiveSegment = {
+        Action : DiveSegmentAction
+        State : State
+    }
+
 
     type ChangeSet = { Depth:float; Rate:float; StepSize: float }
     type Dive = {
@@ -53,21 +62,23 @@ module GfDeco =
         
     let private calcRate rate intertFraction = {He = rate*intertFraction.He; N2= rate*intertFraction.N2}      
 
+    let private calculateAscendDescendTime startingDepth endingDepth rate = (endingDepth - startingDepth)/rate
+
+    let private tpMap mapper tissuePressure = tissuePressure  |> List.map (fun x -> {x with Current = mapper x})
+
     // applies the Schreiner equation to update the gas loadings (partial pressures of helium and nitrogen) 
     // in the half-time compartments due to a linear ascent or descent segment at a constant rate.
     let private gasLoadingsAscentDescent startingDepth endingDepth rate barometricPressure divegas state = // OK
-        let segmentTime = (endingDepth - startingDepth)/rate //segtime = feil
+        let segmentTime = calculateAscendDescendTime startingDepth endingDepth rate
         let ambientPressure = startingDepth + barometricPressure //startingAmbientPressure
         let inspiredPressure = calcInspiredPressure ambientPressure divegas
-        let calc = schreinerEquationBoth inspiredPressure (calcRate rate divegas) segmentTime
-        let tissuePressure = state.TissuePressure |> List.map (fun x -> {x with Current = calc x})
+        let tissuePressure = state.TissuePressure |> tpMap (schreinerEquationBoth inspiredPressure (calcRate rate divegas) segmentTime)
         {state with RunTime = state.RunTime + segmentTime; SegmentTime = segmentTime; TissuePressure = tissuePressure}
 
     let private gasLoadingsConstantDepth depth segmentTime barometricPressure divegas state = // OK
         let ambientPressure = depth + barometricPressure
         let inspiredPressure = calcInspiredPressure ambientPressure divegas
-        let calc = haldaneEquationBoth inspiredPressure segmentTime
-        let tissuePressure = state.TissuePressure |> List.map (fun x -> {x with Current = calc x})
+        let tissuePressure = state.TissuePressure |> tpMap (haldaneEquationBoth inspiredPressure segmentTime)
         {state with RunTime = state.RunTime + segmentTime; SegmentTime = segmentTime; TissuePressure = tissuePressure}
 
     let gasLoading barometricPressure diveplan state x =
@@ -99,7 +110,7 @@ module GfDeco =
        
 
     // Finds the depth at which the leading compartment just enters the decompression zone.
-    let calcStartOfDecoZone startingDepth rate inertGas barometricPressure state =
+    let calcStartOfDecoZone startingDepth rate inertGas barometricPressure tissues =
         let startingAmbientPressure = startingDepth + barometricPressure
         let inspiredPressure = calcInspiredPressure startingAmbientPressure inertGas
         let rates = calcRate rate inertGas
@@ -142,13 +153,15 @@ module GfDeco =
                 timeToStartOfDecoZoneLoop initialTime initialDiffChange
             (startingAmbientPressure + rate*timeToStartOfDecoZone) - barometricPressure
 
-        state.TissuePressure 
+        tissues 
             |> List.map bisect
             |> List.max
     
     let private calcCoefficient inspiredPressure coeff = {
             A = (inspiredPressure.He*coeff.A.He + inspiredPressure.N2*coeff.A.N2)/(inspiredPressure.He+inspiredPressure.N2)
             B = (inspiredPressure.He*coeff.B.He + inspiredPressure.N2*coeff.B.N2)/(inspiredPressure.He+inspiredPressure.N2)}    
+
+    let private calcGasLoading pressure coefficient gf = pressure *(gf/coefficient.B - gf + 1.0) + gf*coefficient.A
 
     let projectedAscent startingDepth rate decoStopDepth stepSize barometricPressure divegas state = 
         let startingAmbientPressure = startingDepth + barometricPressure
@@ -158,19 +171,16 @@ module GfDeco =
         let rec calcDecoStopDepth decoStopDepth endingAmbientPressure =
             let segmentTime = (endingAmbientPressure - startingAmbientPressure)/rate
             let inner = 
-                seq {
+                seq { //TODO: merge with inner in decompressionStop
                     for x in state.TissuePressure do
                         let tempPressure = schreinerEquationBoth inspiredPressure rates segmentTime x
-                        let tempGasLoading = tempPressure.He + tempPressure.N2
                         let coefficient = calcCoefficient tempPressure (x.ToCoeff())
-                        let allowableGasLoading = endingAmbientPressure *(state.GradientFactor/coefficient.B - state.GradientFactor+ 1.0) + state.GradientFactor*coefficient.A
-                        yield tempGasLoading > allowableGasLoading }
+                        let allowableGasLoading = calcGasLoading endingAmbientPressure coefficient state.GradientFactor
+                        yield tempPressure.He + tempPressure.N2 > allowableGasLoading }
             if inner |> Seq.exists id
                 then calcDecoStopDepth (decoStopDepth + stepSize) (endingAmbientPressure + stepSize)
                 else decoStopDepth
         calcDecoStopDepth decoStopDepth (decoStopDepth + barometricPressure)
-            
-        
 
     // calculates the required time at each decompression stop.
     let decompressionStop decoStopDepth stepSize minimumDecoStopTime barometricPressure divegas state =
@@ -180,25 +190,23 @@ module GfDeco =
 
         // Check to make sure that program won't lock up if unable to decompress
         // to the next stop. If so, write error message and terminate program.
-        for x in state.TissuePressure do
-            if inspiredPressure.He + inspiredPressure.N2 > 0.0 then
-                let coefficient = calcCoefficient inspiredPressure (x.ToCoeff())
-                let allowableGasLoading = (nextStop + barometricPressure) * (state.GradientFactor/coefficient.B - state.GradientFactor + 1.0) + state.GradientFactor*coefficient.A
-                if inspiredPressure.He + inspiredPressure.N2 > allowableGasLoading then
-                    failwith (sprintf "ERROR! OFF-GASSING GRADIENT IS TOO SMALL TO DECOMPRESS AT THE %f STOP" decoStopDepth)
+        if inspiredPressure.He + inspiredPressure.N2 > 0.0 then
+            let inner = 
+                seq { //TODO: merge with inner in calcDecoStopDepth
+                    for x in state.TissuePressure do
+                        let coefficient = calcCoefficient inspiredPressure (x.ToCoeff())
+                        let allowableGasLoading = calcGasLoading (nextStop + barometricPressure) coefficient state.GradientFactor
+                        yield inspiredPressure.He + inspiredPressure.N2 > allowableGasLoading}
+            if inner |> Seq.exists id then failwith (sprintf "ERROR! OFF-GASSING GRADIENT IS TOO SMALL TO DECOMPRESS AT THE %f STOP" decoStopDepth)
 
-        let roundUpOperation = (round((state.RunTime/minimumDecoStopTime) + 0.5)) * minimumDecoStopTime
-
-        let rec calc tempSegmentTime tempState =
-            let nextTissue = tempState.TissuePressure |> List.map (fun x -> {x with Current = haldaneEquationBoth inspiredPressure tempState.SegmentTime x})
-            let nextState = { tempState with TissuePressure = nextTissue }
-            if calcDecoCeiling barometricPressure nextState.TissuePressure nextState.GradientFactor > nextStop then
-                calc (tempSegmentTime + minimumDecoStopTime) { nextState with SegmentTime = minimumDecoStopTime; RunTime = tempState.RunTime + minimumDecoStopTime}
-            else {nextState with SegmentTime = tempSegmentTime}  
-        let tempState = {state with SegmentTime = roundUpOperation - state.RunTime; RunTime = roundUpOperation} 
-        calc tempState.SegmentTime tempState
+        let rec calc segmentTime tempSegmentTime runtime tissues tempState =
+            let nextTissue = tissues |> tpMap (haldaneEquationBoth inspiredPressure segmentTime)
+            if calcDecoCeiling barometricPressure nextTissue tempState.GradientFactor > nextStop then
+                calc minimumDecoStopTime (tempSegmentTime + minimumDecoStopTime) (runtime + minimumDecoStopTime) nextTissue tempState
+            else {tempState with SegmentTime = tempSegmentTime; TissuePressure = nextTissue; RunTime = runtime}  
         
-              
+        let roundUpOperation = (round((state.RunTime/minimumDecoStopTime) + 0.5)) * minimumDecoStopTime
+        calc (roundUpOperation - state.RunTime) (roundUpOperation - state.RunTime) roundUpOperation state.TissuePressure state
 
     // This calculates barometric pressure at altitude based on the
     // publication "U.S. Standard Atmosphere, 1976", U.S. Government Printing
@@ -226,12 +234,7 @@ module GfDeco =
         let tempAtGeopotentialAltitude = tempAtSeaLevel + tempGradient * geopotentialAltitude
         pressureAtSeaLevel * exp (Math.Log(tempAtSeaLevel / tempAtGeopotentialAltitude) * gmrFactor / tempGradient)
 
-    let printDeepestPossibleStopDepth depthStartOfDecoZone stepSize =
-        let deepestPossibleStopDepth = 
-            if stepSize < 3. 
-                then (round ((depthStartOfDecoZone/stepSize) - 0.5))* stepSize 
-                else (round ((depthStartOfDecoZone/3.) - 0.5)) * 3. 
-        printfn "deepestPossibleStopDepth %A" deepestPossibleStopDepth
+   
    
     let private hackCoeff (comp:Tables.Compartment) = 
         {comp with 
@@ -271,8 +274,15 @@ module GfDeco =
             then (settings.GradientFactorHi - settings.GradientFactorLo)/(0.0 - decoStopDepth)
             else 0.0 
     
+
+    type DiveInfo = {
+        DeepestPossibleStop:float
+        DepthtartOfDecoZone:float
+        Decompression:DiveSegment list
+    }
+
     let calcDeco dybdeDings barometricPressure settings diveplan state = 
-        let depthStartOfDecoZone = calcStartOfDecoZone dybdeDings.Depth dybdeDings.Rate (diveplan.Gasses.[state.MixNumber].Inert) barometricPressure state
+        let depthStartOfDecoZone = calcStartOfDecoZone dybdeDings.Depth dybdeDings.Rate (diveplan.Gasses.[state.MixNumber].Inert) barometricPressure state.TissuePressure
         let decoCeilingDepth = (calcDecoCeiling barometricPressure state.TissuePressure state.GradientFactor)
         
         let decoStopDepth = 
@@ -287,9 +297,10 @@ module GfDeco =
         let factorSlope = calcFactorSlope settings decoStopDepth
 
         let rec decoLoop depth decoStopDepth stepSize rate prevstates =
-            let oldState = prevstates |> List.last
+            let oldState = (prevstates |> List.last).State
             let ascendState = gasLoadingsAscentDescent depth decoStopDepth rate barometricPressure (diveplan.Gasses.[oldState.MixNumber].Inert) oldState
-            if decoStopDepth <= 0.0 then prevstates @ [ ascendState ]
+            let asc = {Action = ChangeDepth(depth,decoStopDepth); State = ascendState}
+            if decoStopDepth <= 0.0 then prevstates @ [ asc ]
             else
                 let dybdings = findGasForDepth decoStopDepth diveplan
                 let nextStop = decoStopDepth - dybdings.StepSize
@@ -298,15 +309,26 @@ module GfDeco =
                         |> recalcGradientFactors settings factorSlope nextStop
                         |> switchDecoGasIfNeccecary diveplan decoStopDepth
                         |> decompressionStop2 decoStopDepth stepSize settings.MinimumDecoStopTime barometricPressure diveplan
-                decoLoop decoStopDepth nextStop stepSize rate (prevstates @ [ ascendState; decoState ])
-        decoLoop dybdeDings.Depth decoStopDepth dybdeDings.StepSize dybdeDings.Rate [state]
+                decoLoop decoStopDepth nextStop stepSize rate (prevstates @ [ asc; {Action = KeepDepth(decoStopDepth); State = decoState} ])
+        let deco = decoLoop dybdeDings.Depth decoStopDepth dybdeDings.StepSize dybdeDings.Rate [{Action = KeepDepth(0.0); State = state} ]
+        {
+            Decompression = deco |> List.skip 1
+            DepthtartOfDecoZone = depthStartOfDecoZone
+            DeepestPossibleStop = 
+                if dybdeDings.StepSize < 3. 
+                    then (round ((depthStartOfDecoZone/dybdeDings.StepSize) - 0.5))* dybdeDings.StepSize 
+                    else (round ((depthStartOfDecoZone/3.) - 0.5)) * 3. 
 
+        }
     
     let calcDiveplan settings diveplan  =
         let barometricPressure = calcBarometricPressure 0.0
         diveplan.DivePlanSegments |> List.scan (gasLoading barometricPressure diveplan) (createInitialDiveState barometricPressure settings.GradientFactorLo)
-
+    
+  
     let calciveplanDeco settings diveplan =
         let barometricPressure = calcBarometricPressure 0.0
         let state = calcDiveplan settings diveplan |> List.last
-        calcDeco diveplan.Change.[0] barometricPressure settings diveplan state |> List.skip 1
+        let res = calcDeco diveplan.Change.[0] barometricPressure settings diveplan state
+        //printDive res
+        res.Decompression |> List.map (fun x -> x.State)
