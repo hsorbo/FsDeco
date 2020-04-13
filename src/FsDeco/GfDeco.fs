@@ -4,7 +4,7 @@ namespace FsDeco
 module GfDeco =
     open System
     open Gas
-
+   
     type Coefficients<'t> = {A:'t; B:'t}
 
     type TissuePressures = {
@@ -24,7 +24,9 @@ module GfDeco =
     
     type DivePlanSegment =
     | AscentDescent of startingDepth:float * endingDepth:float * rate:float * mixNumber:int
-    | ConstantDepth of depth:float * runTimeEndOfSegment:float * mixNumber:int
+    | ConstantDepthAbsoluteRuntime of depth:float * runTimeEndOfSegment:float * mixNumber:int
+    | ConstantDepth of depth:float * segmentTime:float * mixNumber:int
+    
 
     type ChangeSet = { Depth:float; Rate:float; StepSize: float }
     type Dive = {
@@ -61,21 +63,23 @@ module GfDeco =
         let tissuePressure = state.TissuePressure |> List.map (fun x -> {x with Current = calc x})
         {state with RunTime = state.RunTime + segmentTime; SegmentTime = segmentTime; TissuePressure = tissuePressure}
 
-    //hsorbo: remark: the runtime of this is total runtime (if runtime of previous segment is longer this is invalid)
-    let private gasLoadingsConstantDepth depth runTimeEndOfSegment barometricPressure divegas state = // OK
-        let segmentTime = runTimeEndOfSegment - state.RunTime
+    let private gasLoadingsConstantDepth depth segmentTime barometricPressure divegas state = // OK
         let ambientPressure = depth + barometricPressure
         let inspiredPressure = calcInspiredPressure ambientPressure divegas
         let calc = haldaneEquationBoth inspiredPressure segmentTime
         let tissuePressure = state.TissuePressure |> List.map (fun x -> {x with Current = calc x})
-        {state with RunTime = runTimeEndOfSegment; SegmentTime = segmentTime; TissuePressure = tissuePressure}
+        {state with RunTime = state.RunTime + segmentTime; SegmentTime = segmentTime; TissuePressure = tissuePressure}
 
     let gasLoading barometricPressure diveplan state x =
         match x with
             | AscentDescent (startDepth, endDepth, rate, mixNumber) -> 
                 gasLoadingsAscentDescent startDepth endDepth rate barometricPressure diveplan.Gasses.[mixNumber].Inert state
-            | ConstantDepth (depth, runtimeEndOfSegment, mixNumber) -> 
-                gasLoadingsConstantDepth depth runtimeEndOfSegment barometricPressure diveplan.Gasses.[mixNumber].Inert state
+            | ConstantDepthAbsoluteRuntime (depth, runtimeEndOfSegment, mixNumber) -> 
+                let segmentTime = runtimeEndOfSegment - state.RunTime
+                if segmentTime < 0.0 then failwith "Too short runtimeEndOfSegment"
+                gasLoadingsConstantDepth depth segmentTime barometricPressure diveplan.Gasses.[mixNumber].Inert state
+            | ConstantDepth (depth, segmentTime, mixNumber) -> 
+                gasLoadingsConstantDepth depth segmentTime barometricPressure diveplan.Gasses.[mixNumber].Inert state
 
     let calcDecoCelinngComp barometricPressure gradientFactor comp = 
         let gasload = comp.Current.He + comp.Current.N2
@@ -84,14 +88,14 @@ module GfDeco =
         let l = (gasload - a*gradientFactor)/(gradientFactor/b - gradientFactor + 1.0)
         (max 0.0 l) - barometricPressure
 
-    let calcDecoCeilings barometricPressure state = // OK
-        state.TissuePressure |> List.map (fun x -> calcDecoCelinngComp barometricPressure state.GradientFactor x)
+    let calcDecoCeilings barometricPressure tissues gf = // OK
+        tissues |> List.map (fun x -> calcDecoCelinngComp barometricPressure gf x)
 
     // This calculates the deco ceiling (the safe ascent depth) in each compartment, 
     // based on M-values modifed by gradient factors,and then finds the deepest deco 
     // ceiling across all compartments. This deepest value (Deco Ceiling Depth) is then 
     // used by the Decompression Stop subroutine to determine the actual deco schedule.
-    let calcDecoCeiling barometricPressure state = calcDecoCeilings barometricPressure state |> List.max
+    let calcDecoCeiling barometricPressure tissues gf = calcDecoCeilings barometricPressure tissues gf |> List.max
        
 
     // Finds the depth at which the leading compartment just enters the decompression zone.
@@ -188,7 +192,7 @@ module GfDeco =
         let rec calc tempSegmentTime tempState =
             let nextTissue = tempState.TissuePressure |> List.map (fun x -> {x with Current = haldaneEquationBoth inspiredPressure tempState.SegmentTime x})
             let nextState = { tempState with TissuePressure = nextTissue }
-            if calcDecoCeiling barometricPressure nextState > nextStop then
+            if calcDecoCeiling barometricPressure nextState.TissuePressure nextState.GradientFactor > nextStop then
                 calc (tempSegmentTime + minimumDecoStopTime) { nextState with SegmentTime = minimumDecoStopTime; RunTime = tempState.RunTime + minimumDecoStopTime}
             else {nextState with SegmentTime = tempSegmentTime}  
         let tempState = {state with SegmentTime = roundUpOperation - state.RunTime; RunTime = roundUpOperation} 
@@ -221,9 +225,6 @@ module GfDeco =
         let geopotentialAltitude = (altitudeKilometers * radiusOfEarth) / (altitudeKilometers + radiusOfEarth)
         let tempAtGeopotentialAltitude = tempAtSeaLevel + tempGradient * geopotentialAltitude
         pressureAtSeaLevel * exp (Math.Log(tempAtSeaLevel / tempAtGeopotentialAltitude) * gmrFactor / tempGradient)
-
-
-///    let divedataAscentDescent Starting_Depth Ending_Depth Rate Respiratory_Minute_Volume =
 
     let printDeepestPossibleStopDepth depthStartOfDecoZone stepSize =
         let deepestPossibleStopDepth = 
@@ -272,7 +273,7 @@ module GfDeco =
     
     let calcDeco dybdeDings barometricPressure settings diveplan state = 
         let depthStartOfDecoZone = calcStartOfDecoZone dybdeDings.Depth dybdeDings.Rate (diveplan.Gasses.[state.MixNumber].Inert) barometricPressure state
-        let decoCeilingDepth = (calcDecoCeiling barometricPressure state)
+        let decoCeilingDepth = (calcDecoCeiling barometricPressure state.TissuePressure state.GradientFactor)
         
         let decoStopDepth = 
             if decoCeilingDepth < 0.0 

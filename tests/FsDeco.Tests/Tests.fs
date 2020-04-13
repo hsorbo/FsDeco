@@ -5,6 +5,7 @@ open FsDeco
 open FsDeco.Decompression
 open Swensen.Unquote
 open Gas
+
 let tables = Resources.loadBundledTables ()
 
 
@@ -137,7 +138,7 @@ module GfDecoTests =
                 { O2 = 0.80; Inert = {He = 0.0;  N2 = 0.20 }} ]
             DivePlanSegments = [
             AscentDescent(0.,90.,23.,0)
-            ConstantDepth(90.,20.,0)]
+            ConstantDepthAbsoluteRuntime(90.,20.,0)]
             Change = [
                 {Depth = 90.; Rate = -10.; StepSize = 3.}
                 {Depth = 33.; Rate = -10.; StepSize = 3.}
@@ -217,7 +218,7 @@ module GfDecoTests =
             Gasses = [ { O2 = 0.21; Inert = {He = 0.35; N2 = 0.44 }} ]
             DivePlanSegments = [
                 AscentDescent(0.,50.,10.,0)
-                ConstantDepth(50.,25.,0)]
+                ConstantDepthAbsoluteRuntime(50.,25.,0)]
             Change = [
                 {Depth = 50.; Rate = -10.; StepSize = 3.}]}
         let calculatedDeco = GfDeco.calciveplanDeco settings diveplan
