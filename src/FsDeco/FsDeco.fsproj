@@ -5,6 +5,7 @@
   <ItemGroup>
     <Compile Include="Resources.fs" />
     <Compile Include="DecompressionModels.fs" />
+    <Compile Include="GfDeco.fs" />
   </ItemGroup>
 
   <ItemGroup>

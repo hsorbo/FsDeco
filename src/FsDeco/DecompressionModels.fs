@@ -12,6 +12,7 @@ open Microsoft.FSharp.Core
 module Constants =
     let waterVaporPressure = 0.0627<bar>
     let surfacePressure = 1.0<bar>
+    let waterVaporPressureEricBaker = 0.567  // for feet 1.848
 
 module Calculations =
     //Palv Pressure of inspired inert gas
@@ -21,9 +22,18 @@ module Calculations =
     
     let shreinerFull po fGas pAbs pWvp pRate t hT = 
         schreiner po (pAlv fGas pAbs pWvp) (fGas * pRate) t (log(2.) / hT)
+
+    let schreinerEquation initialInspiredGasPressure rateChangeInspGasPressure intervalTime gasTimeConstant initialGasPressure = 
+        initialInspiredGasPressure + rateChangeInspGasPressure * (intervalTime - 1.0/gasTimeConstant) 
+        - (initialInspiredGasPressure - initialGasPressure - rateChangeInspGasPressure/gasTimeConstant) * exp(-gasTimeConstant*intervalTime)
+    
     
     //Buhlmann + Erik Baker GF: Pl=(P-A*gf)/(gf/B+1.0−gf)
     let buhlmann gf a b p = (p - a * gf)/(gf/b + 1.0 - gf)
+
+    let haldaneEquation initialGasPressure inspiredGasPressure gasTimeConstant intervalTime =
+        initialGasPressure + (inspiredGasPressure - initialGasPressure) * (1.0 - exp(-gasTimeConstant * intervalTime))
+
     
 module TypedCalculations =
     let pressureOfInspiredInertGas waterVaporPressure (absolutePressure:float<bar>) (inertGasFraction:float<gasFraction>)  =
@@ -59,15 +69,21 @@ module TypedCalculations =
     let buhlmann gradientFactor a b (pressure:float<bar>) = 
         Calculations.buhlmann gradientFactor a b (float pressure) * 1.<bar>
 
-
+module Gas =
+    type InertGasses = {He:float;N2:float}
+    type GasMix = {O2:float;Inert:InertGasses} with 
+        member x.Mod (ppO2:float<bar>) : float<bar> = ppO2 / (float x.O2)
+        static member EAN32      = {O2=0.32;Inert = {N2=0.68;  He=0.0}}
+        static member Air        = {O2=0.21;Inert = {N2=0.7902;He=0.00}}
+        static member Trimix2135 = {O2=0.21;Inert = {N2=0.56;  He=0.35}}
+        static member Trimix1845 = {O2=0.18;Inert = {N2=0.37;  He=0.45}}
+        static member Trimix1555 = {O2=0.15;Inert = {N2=0.30;  He=0.55}}
+        static member Trimix1070 = {O2=0.10;Inert = {N2=0.20;  He=0.70}}
+        
 
 module Decompression =
     open Tables
-    
-    type GasMix = {He:float<gasFraction>;N2:float<gasFraction>} with 
-        static member EAN32 = {N2 = 0.68<gasFraction>; He=0.<gasFraction>}
-        static member Air = {N2 = 0.7902<gasFraction>; He=0.<gasFraction>}
-    
+    open Gas
     type DiveStep = {Breathing:GasMix; Time:float<min>; AscentRate:float<bar/min>; CurrentAbsolutePressure:float<bar>}
 
     // type GradientFactor = {Hi:float;Low:float}
@@ -79,8 +95,8 @@ module Decompression =
 
     type DiveState = {Helium: TissuePressure list;Nitrogen: TissuePressure list} with
         static member Init (table:Table) = {
-            Helium   = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure GasMix.Air.He; CompartmentDetails = x.He })
-            Nitrogen = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure GasMix.Air.N2; CompartmentDetails = x.N2 })}
+            Helium   = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure (LanguagePrimitives.FloatWithMeasure<gasFraction> GasMix.Air.Inert.He); CompartmentDetails = x.He })
+            Nitrogen = table.Compartments |> List.map (fun x -> {Current = calcSurfacePressure (LanguagePrimitives.FloatWithMeasure<gasFraction> GasMix.Air.Inert.N2); CompartmentDetails = x.N2 })}
         
     let schreinerNewState (state:DiveState) (diving:DiveStep) = 
         let calc inertGasFraction state = { 
@@ -93,7 +109,7 @@ module Decompression =
                     diving.Time 
                     Constants.waterVaporPressure
                     state.CompartmentDetails.HalfTime }
-        { Helium = state.Helium |> List.map (calc diving.Breathing.He)
-          Nitrogen = state.Nitrogen |> List.map (calc diving.Breathing.N2)}
+        { Helium = state.Helium |> List.map (calc (LanguagePrimitives.FloatWithMeasure<gasFraction> diving.Breathing.Inert.He))
+          Nitrogen = state.Nitrogen |> List.map (calc (LanguagePrimitives.FloatWithMeasure<gasFraction> diving.Breathing.Inert.N2))}
     
     let schreinerCacluate table dives = List.scan schreinerNewState (DiveState.Init table) dives 
