@@ -4,10 +4,10 @@ open Xunit
 open FsDeco
 open FsDeco.Decompression
 open Swensen.Unquote
-
+open Gas
 let tables = Resources.loadBundledTables ()
 
-(*
+
 module DecotenguExamples =
     //https://wrobell.dcmod.org/decotengu/model.html
     let exampleDive = [
@@ -40,7 +40,7 @@ module DecotenguExamples =
         //0.314886, 0.4592862, 1.7907266, 1.6730607
         let expected = [0.314886009020073631<bar>; 0.459285984345593145<bar>; 1.79072739810699244<bar>; 1.6730610933715213<bar>]
         test <@ calculatedLimits = expected @>
-*)
+
 
 module GfDecoTests = 
     open GfDeco
@@ -149,7 +149,7 @@ module GfDecoTests =
         let segmentTime = [3.6;0.4;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;1.7;0.3;3.7;0.3;3.7;0.3;5.7;0.3;7.7;0.3;9.7;0.3;17.7;0.3;33.7;0.3]
         let runtime = [23.6;24.0;24.3;26.0;26.3;28.0;28.3;30.0;30.3;32.0;32.3;34.0;34.3;36.0;36.3;38.0;38.3;40.0;40.3;42.0;42.3;44.0;44.3;48.0;48.3;52.0;52.3;58.0;58.3;66.0;66.3;76.0;76.3;94.0;94.3;128.0;128.3]
         let gasNumber = [1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;2;2;2;2;2;2;2;2;3;3;3;3;3;3;3;3;4;4;4;4;4;4]
-        let calculatedDeco = GfDeco.eple settings diveplan
+        let calculatedDeco = GfDeco.calciveplanDeco settings diveplan
         //printfn "%A" segmentTime
         //printfn "%A" (calculatedDeco |> List.map (fun x -> x.SegmentTime) |> onePresison)
         test <@ calculatedDeco |> List.map (fun x -> x.SegmentTime) |> onePresison = segmentTime @>
@@ -220,7 +220,7 @@ module GfDecoTests =
                 ConstantDepth(50.,25.,0)]
             Change = [
                 {Depth = 50.; Rate = -10.; StepSize = 3.}]}
-        let calculatedDeco = GfDeco.eple settings diveplan
+        let calculatedDeco = GfDeco.calciveplanDeco settings diveplan
         test <@ calculatedDeco |> List.map (fun x -> x.SegmentTime) |> onePresison = segmentTime @>
         test <@ calculatedDeco |> List.map (fun x -> x.RunTime) = runtime @>
         test <@ (calculatedDeco |> List.last).GradientFactor = 0.90 @>

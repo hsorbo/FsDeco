@@ -5,12 +5,6 @@ module GfDeco =
     open System
     open Gas
 
-
-    let PO2LO = [ 0.5; 0.6; 0.7; 0.8; 0.9; 1.1; 1.5; 1.6061; 1.62; 1.74 ]
-    let PO2HI = [ 0.6; 0.7; 0.8; 0.9; 1.1; 1.5; 1.6061; 1.62; 1.74; 1.82 ]
-    let LIMSLP = [ -1800.0; -1500.0; -1200.0; -900.0; -600.0; -300.0; -750.0; -1250.0; -125.0; -50.0 ]
-    let LIMINT = [ 1800.0; 1620.0; 1410.0; 1170.0; 900.0; 570.0; 1245.0; 2045.0; 222.5; 92.0 ]
-
     type Coefficients<'t> = {A:'t; B:'t}
 
     type TissuePressures = {
@@ -311,7 +305,7 @@ module GfDeco =
         let barometricPressure = calcBarometricPressure 0.0
         diveplan.DivePlanSegments |> List.scan (gasLoading barometricPressure diveplan) (createInitialDiveState barometricPressure settings.GradientFactorLo)
 
-    let eple settings diveplan=
+    let calciveplanDeco settings diveplan =
         let barometricPressure = calcBarometricPressure 0.0
         let state = calcDiveplan settings diveplan |> List.last
         calcDeco diveplan.Change.[0] barometricPressure settings diveplan state |> List.skip 1
